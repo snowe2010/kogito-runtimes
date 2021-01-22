@@ -138,8 +138,6 @@ public class KogitoAssetsProcessor {
 
 
         boolean useProcessSVG = combinedIndexBuildItem.getIndex().getClassByName(quarkusSVGService) != null;
-        DotName requestHandler = DotName.createSimple("com.amazonaws.services.lambda.runtime.RequestHandler");
-        Collection<ClassInfo> allKnownImplementors = combinedIndexBuildItem.getIndex().getAllKnownImplementors(requestHandler);
 
         // configure the application generator
         KogitoBuildContext context = kogitoBuildContext();

@@ -15,33 +15,32 @@
 
 package org.kie.kogito.codegen;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-
 import com.github.javaparser.ast.CompilationUnit;
-import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
-import com.github.javaparser.ast.comments.BlockComment;
+import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.expr.ThisExpr;
-import com.github.javaparser.ast.stmt.ExpressionStmt;
+import org.kie.kogito.codegen.context.KogitoBuildContext;
 
-public class ApplicationContainerGenerator extends TemplatedGenerator {
+import java.util.ArrayList;
+import java.util.List;
 
-    public static final String APPLICATION_CLASS_NAME = "Application";
-    private static final String RESOURCE_CDI = "/class-templates/CdiApplicationTemplate.java";
-    private static final String RESOURCE_SPRING = "/class-templates/SpringApplicationTemplate.java";
-    private static final String RESOURCE_DEFAULT = "/class-templates/ApplicationTemplate.java";
+import static org.kie.kogito.codegen.ApplicationGenerator.APPLICATION_CLASS_NAME;
+
+public class ApplicationContainerGenerator {
+
+    private static final GeneratedFileType APPLICATION_TYPE = GeneratedFileType.of("APPLICATION", GeneratedFileType.Category.SOURCE);
+
+    private final TemplatedGenerator templatedGenerator;
+    private final KogitoBuildContext context;
 
     private List<String> sections = new ArrayList<>();
 
-    public ApplicationContainerGenerator(String packageName) {
-        super(packageName,
-              APPLICATION_CLASS_NAME,
-              RESOURCE_CDI,
-              RESOURCE_SPRING,
-              RESOURCE_DEFAULT);
+    public ApplicationContainerGenerator(KogitoBuildContext context) {
+        this.templatedGenerator = TemplatedGenerator.builder()
+                .build(context, APPLICATION_CLASS_NAME);
+
+        this.context = context;
     }
 
     public ApplicationContainerGenerator withSections(List<String> sections) {
@@ -49,56 +48,51 @@ public class ApplicationContainerGenerator extends TemplatedGenerator {
         return this;
     }
 
-    public CompilationUnit getCompilationUnitOrThrow() {
-        return compilationUnit()
-                .orElseThrow(() -> new InvalidTemplateException(
-                        APPLICATION_CLASS_NAME,
-                        templatePath(),
-                        "Cannot find template for " + super.typeName()));
-    }
-
-    public Optional<CompilationUnit> compilationUnit() {
-        Optional<CompilationUnit> optionalCompilationUnit = super.compilationUnit();
-        CompilationUnit compilationUnit =
-                optionalCompilationUnit
-                        .orElseThrow(() -> new InvalidTemplateException(
-                                APPLICATION_CLASS_NAME,
-                                templatePath(),
-                                "Cannot find template for " + super.typeName()));
+    protected CompilationUnit getCompilationUnitOrThrow() {
+        CompilationUnit compilationUnit = templatedGenerator.compilationUnitOrThrow();
 
         ClassOrInterfaceDeclaration cls = compilationUnit
                 .findFirst(ClassOrInterfaceDeclaration.class)
                 .orElseThrow(() -> new InvalidTemplateException(
-                        APPLICATION_CLASS_NAME,
-                        templatePath(),
+                        templatedGenerator,
                         "Compilation unit doesn't contain a class or interface declaration!"));
 
-        for (String section : sections) {
-            replaceSectionPlaceHolder(cls, section);
+        // Add explicit initialization when no DI
+        if (!context.hasDI()) {
+            initEngines(getLoadEnginesMethod(cls), sections);
         }
 
         cls.getMembers().sort(new BodyDeclarationComparator());
-        return optionalCompilationUnit;
+
+        return compilationUnit;
     }
 
-    private void replaceSectionPlaceHolder(ClassOrInterfaceDeclaration cls, String sectionClassName) {
-        // look for an expression of the form: foo = ... /* $SectionName$ */ ;
-        //      e.g.: this.processes = null /* $Processes$ */;
-        // and replaces the entire expression with an initializer; e.g.:
-        //      e.g.: this.processes = new Processes(this);
+    public GeneratedFile generate() {
+        return new GeneratedFile(APPLICATION_TYPE,
+                templatedGenerator.generatedFilePath(),
+                getCompilationUnitOrThrow().toString());
+    }
 
-        // new $SectionName$(this)
-        ObjectCreationExpr sectionCreationExpr = new ObjectCreationExpr()
-                .setType(sectionClassName)
-                .addArgument(new ThisExpr());
+    private MethodCallExpr getLoadEnginesMethod(ClassOrInterfaceDeclaration cls) {
+        return cls.findFirst(MethodCallExpr.class, mtd -> "loadEngines".equals(mtd.getNameAsString()))
+                    .orElseThrow(() -> new InvalidTemplateException(
+                            templatedGenerator,
+                            "Impossible to find loadEngines invocation"));
+    }
 
-        cls.findFirst(
-                BlockComment.class, c -> c.getContent().trim().equals('$' + sectionClassName + '$'))
-                .flatMap(Node::getParentNode)
-                .map(ExpressionStmt.class::cast)
-                .map(e -> e.getExpression().asAssignExpr())
-                .ifPresent(assignExpr -> assignExpr.setValue(sectionCreationExpr));
-        // else ignore: there is no such templated argument
-
+    /**
+     * For each section it produces a new instance follow naming convention and add it to methodCallExpr
+     *       e.g. section: Processes
+     * produce:
+     *       e.g.: new Processes(this)
+     * @param methodCallExpr
+     * @param sections
+     */
+    private void initEngines(MethodCallExpr methodCallExpr, List<String> sections) {
+        sections.stream()
+                .map(section -> new ObjectCreationExpr()
+                        .setType(section)
+                        .addArgument(new ThisExpr()))
+                .forEach(methodCallExpr::addArgument);
     }
 }

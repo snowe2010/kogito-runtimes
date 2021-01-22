@@ -17,7 +17,6 @@ package org.kie.kogito.codegen.decision;
 
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.Objects;
 
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
@@ -32,65 +31,53 @@ import com.github.javaparser.ast.expr.StringLiteralExpr;
 import com.github.javaparser.ast.stmt.BlockStmt;
 import com.github.javaparser.ast.type.ClassOrInterfaceType;
 import org.kie.api.management.GAV;
-import org.kie.kogito.codegen.AddonsConfig;
-import org.kie.kogito.codegen.di.DependencyInjectionAnnotator;
+import org.kie.kogito.codegen.InvalidTemplateException;
+import org.kie.kogito.codegen.TemplatedGenerator;
+import org.kie.kogito.codegen.context.JavaKogitoBuildContext;
+import org.kie.kogito.codegen.context.KogitoBuildContext;
 import org.kie.kogito.decision.DecisionModelType;
 import org.kie.kogito.dmn.DefaultDecisionModelResource;
 
-import static com.github.javaparser.StaticJavaParser.parse;
 import static org.kie.kogito.codegen.CodegenUtils.newObject;
 import static org.kie.kogito.codegen.decision.ReadResourceUtil.getReadResourceMethod;
 
 public class DecisionModelResourcesProviderGenerator {
 
-    private static final String TEMPLATE_JAVA = "/class-templates/DecisionModelResourcesProviderTemplate.java";
-
-    private final String packageName;
+    private final KogitoBuildContext context;
     private final String applicationCanonicalName;
     private final List<DMNResource> resources;
+    private final TemplatedGenerator generator;
 
-    private DependencyInjectionAnnotator annotator;
-    private AddonsConfig addonsConfig = AddonsConfig.DEFAULT;
-
-    public DecisionModelResourcesProviderGenerator(final String packageName,
+    public DecisionModelResourcesProviderGenerator(final KogitoBuildContext context,
                                                    final String applicationCanonicalName,
                                                    final List<DMNResource> resources) {
-        this.packageName = packageName;
+        this.context = context;
         this.applicationCanonicalName = applicationCanonicalName;
         this.resources = resources;
-    }
-
-    public DecisionModelResourcesProviderGenerator withDependencyInjection(final DependencyInjectionAnnotator annotator) {
-        this.annotator = annotator;
-        return this;
-    }
-
-    public DecisionModelResourcesProviderGenerator withAddons(final AddonsConfig addonsConfig) {
-        this.addonsConfig = addonsConfig;
-        return this;
+        this.generator = TemplatedGenerator.builder()
+                .withFallbackContext(JavaKogitoBuildContext.CONTEXT_NAME)
+                .build(context, "DecisionModelResourcesProvider");
     }
 
     public String generate() {
-        final CompilationUnit compilationUnit =
-                parse(this.getClass().getResourceAsStream(TEMPLATE_JAVA))
-                        .setPackageDeclaration(packageName);
+        final CompilationUnit compilationUnit = generator.compilationUnitOrThrow();
 
         final ClassOrInterfaceDeclaration clazz = compilationUnit
                 .findFirst(ClassOrInterfaceDeclaration.class)
                 .orElseThrow(() -> new NoSuchElementException("Compilation unit doesn't contain a class or interface declaration!"));
 
-        if (Objects.nonNull(this.annotator)) {
-            annotator.withSingletonComponent(clazz);
+        if (context.hasDI()) {
+            context.getDependencyInjectionAnnotator().withSingletonComponent(clazz);
         }
 
-        if (addonsConfig.useTracing()) {
+        if (context.getAddonsConfig().useTracing()) {
             setupResourcesVariable(clazz);
         }
         return compilationUnit.toString();
     }
 
     public String generatedFilePath() {
-        return (this.packageName + ".DecisionModelResourcesProvider").replace('.', '/') + ".java";
+        return generator.generatedFilePath();
     }
 
     private void setupResourcesVariable(final ClassOrInterfaceDeclaration typeDeclaration) {
@@ -98,7 +85,9 @@ public class DecisionModelResourcesProviderGenerator {
         final ClassOrInterfaceType applicationClass = StaticJavaParser.parseClassOrInterfaceType(applicationCanonicalName);
 
         if (getResourcesMethods.size() != 1) {
-            throw (new RuntimeException("A \"getResources()\" method was not found in " + TEMPLATE_JAVA));
+            throw new InvalidTemplateException(
+                    generator,
+                    "A \"getResources()\" method was not found");
         }
         final MethodDeclaration getResourcesMethod = getResourcesMethods.get(0);
         final BlockStmt body = getResourcesMethod.getBody().orElseThrow(() -> new RuntimeException("Can't find the body of the \"get()\" method."));

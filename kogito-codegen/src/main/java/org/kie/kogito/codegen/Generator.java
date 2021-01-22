@@ -15,24 +15,24 @@
 
 package org.kie.kogito.codegen;
 
-import java.nio.file.Path;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Map;
+import org.kie.kogito.codegen.context.KogitoBuildContext;
 
-import org.kie.kogito.codegen.di.DependencyInjectionAnnotator;
+import java.util.Collection;
+import java.util.Optional;
 
 /**
  * A code generator for a part of the platform, e.g. rules, processes, etc.
  */
 public interface Generator {
 
+    String CONFIG_PREFIX = "kogito.codegen.";
+
     /**
      * Returns the "section" of the Application class corresponding to rules.
      * e.g the processes() method with processes().createMyProcess() etc.
      *
      */
-    ApplicationSection section();
+    Optional<ApplicationSection> section();
 
     /**
      * Returns the collection of all the files that have been generated/compiled
@@ -41,24 +41,20 @@ public interface Generator {
     Collection<GeneratedFile> generate();
 
     /**
-     * Consumes the given ConfigGenerator so that it can enrich it with
+     * Consumes the given ApplicationConfigGenerator so that it can enrich it with
      * further, Generator-specific details.
      *
      * This is automatically called by the ApplicationGenerator.
      */
-    void updateConfig(ConfigGenerator cfg);
+    void updateConfig(ApplicationConfigGenerator cfg);
 
-    void setPackageName(String packageName);
+    KogitoBuildContext context();
 
-    void setDependencyInjection(DependencyInjectionAnnotator annotator);
-    
-    void setProjectDirectory(Path projectDirectory);
-    
-    void setContext(GeneratorContext context);
-    
-    GeneratorContext context();
-    
-    default Map<String, String> getLabels() {
-        return Collections.emptyMap();
+    String name();
+
+    default boolean isEnabled() {
+        return context().getApplicationProperty(CONFIG_PREFIX + name())
+                .map("true"::equalsIgnoreCase)
+                .orElse(true);
     }
 }

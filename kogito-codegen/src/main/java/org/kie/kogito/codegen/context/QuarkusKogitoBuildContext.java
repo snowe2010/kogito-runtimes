@@ -15,18 +15,38 @@
 
 package org.kie.kogito.codegen.context;
 
-import java.util.function.Predicate;
+import org.kie.kogito.codegen.di.CDIDependencyInjectionAnnotator;
 
-public class QuarkusKogitoBuildContext implements KogitoBuildContext {
+public class QuarkusKogitoBuildContext extends AbstractKogitoBuildContext {
 
-    private Predicate<String> classAvailabilityResolver;
+    public static final String CONTEXT_NAME = "Quarkus";
 
-    public QuarkusKogitoBuildContext(Predicate<String> classAvailabilityResolver) {
-        this.classAvailabilityResolver = classAvailabilityResolver;
+    protected QuarkusKogitoBuildContext(QuarkusKogitoBuildContextBuilder builder) {
+        super(builder, new CDIDependencyInjectionAnnotator(), CONTEXT_NAME);
     }
 
     @Override
-    public boolean hasClassAvailable(String fqcn) {
-        return classAvailabilityResolver.test(fqcn);
+    public boolean hasREST() {
+        return hasClassAvailable("javax.ws.rs.Path");
+    }
+
+    public static Builder builder() {
+        return new QuarkusKogitoBuildContextBuilder();
+    }
+
+    protected static class QuarkusKogitoBuildContextBuilder extends AbstractBuilder {
+
+        protected QuarkusKogitoBuildContextBuilder() {
+        }
+
+        @Override
+        public QuarkusKogitoBuildContext build() {
+            return new QuarkusKogitoBuildContext(this);
+        }
+
+        @Override
+        public String toString() {
+            return "Quarkus";
+        }
     }
 }

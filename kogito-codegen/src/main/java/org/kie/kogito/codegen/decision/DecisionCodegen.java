@@ -15,7 +15,6 @@
 
 package org.kie.kogito.codegen.decision;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -46,14 +45,12 @@ import org.kie.dmn.typesafe.DMNAllTypesIndex;
 import org.kie.dmn.typesafe.DMNTypeSafePackageName;
 import org.kie.dmn.typesafe.DMNTypeSafeTypeGenerator;
 import org.kie.kogito.codegen.AbstractGenerator;
-import org.kie.kogito.codegen.AddonsConfig;
-import org.kie.kogito.codegen.ApplicationGenerator;
 import org.kie.kogito.codegen.ApplicationSection;
-import org.kie.kogito.codegen.ConfigGenerator;
 import org.kie.kogito.codegen.DashboardGeneratedFileUtils;
 import org.kie.kogito.codegen.GeneratedFile;
+import org.kie.kogito.codegen.GeneratedFileType;
+import org.kie.kogito.codegen.context.KogitoBuildContext;
 import org.kie.kogito.codegen.decision.config.DecisionConfigGenerator;
-import org.kie.kogito.codegen.di.DependencyInjectionAnnotator;
 import org.kie.kogito.codegen.io.CollectedResource;
 import org.kie.kogito.grafana.GrafanaConfigurationWriter;
 import org.slf4j.Logger;
@@ -68,40 +65,28 @@ public class DecisionCodegen extends AbstractGenerator {
     public static String STRONGLY_TYPED_CONFIGURATION_KEY = "kogito.decisions.stronglytyped";
     public static String VALIDATION_CONFIGURATION_KEY = "kogito.decisions.validation";
 
-    public static DecisionCodegen ofCollectedResources(Collection<CollectedResource> resources) {
+    public static DecisionCodegen ofCollectedResources(KogitoBuildContext context, Collection<CollectedResource> resources) {
         OASFactoryResolver.instance(); // manually invoke SPI, o/w Kogito CodeGen Kogito Quarkus extension failure at NewFileHotReloadTest due to java.util.ServiceConfigurationError: org.eclipse.microprofile.openapi.spi.OASFactoryResolver: io.smallrye.openapi.spi.OASFactoryResolverImpl not a subtype
         List<CollectedResource> dmnResources = resources.stream()
                 .filter(r -> r.resource().getResourceType() == ResourceType.DMN)
                 .collect(toList());
-        return new DecisionCodegen(dmnResources);
+        return new DecisionCodegen(context, dmnResources);
     }
 
-    public static DecisionCodegen ofPath(Path... paths) throws IOException {
-        return ofCollectedResources(CollectedResource.fromPaths(paths));
+    public static DecisionCodegen ofPath(KogitoBuildContext context, Path... paths) {
+        return ofCollectedResources(context, CollectedResource.fromPaths(paths));
     }
 
     private static final String operationalDashboardDmnTemplate = "/grafana-dashboard-template/operational-dashboard-template.json";
     private static final String domainDashboardDmnTemplate = "/grafana-dashboard-template/blank-dashboard.json";
 
-    private String packageName;
-    private String applicationCanonicalName;
-    private DependencyInjectionAnnotator annotator;
-
-    private DecisionContainerGenerator decisionContainerGenerator;
-
     private final List<CollectedResource> cResources;
     private final List<DMNResource> resources = new ArrayList<>();
     private final List<GeneratedFile> generatedFiles = new ArrayList<>();
-    private AddonsConfig addonsConfig = AddonsConfig.DEFAULT;
-    private ClassLoader notPCLClassloader; // Kogito CodeGen design as of 2020-10-09
-    private PCLResolverFn pclResolverFn = this::trueIFFClassIsPresent;
 
-    public DecisionCodegen(List<CollectedResource> cResources) {
+    public DecisionCodegen(KogitoBuildContext context, List<CollectedResource> cResources) {
+        super(context, "decisions", new DecisionConfigGenerator(context));
         this.cResources = cResources;
-
-        // set default package name
-        setPackageName(ApplicationGenerator.DEFAULT_PACKAGE_NAME);
-        this.decisionContainerGenerator = new DecisionContainerGenerator(applicationCanonicalName, this.cResources);
     }
 
     private void loadModelsAndValidate() {
@@ -117,17 +102,6 @@ public class DecisionCodegen extends AbstractGenerator {
         DecisionValidation.dmnValidateDecisionTablesInModels(context(), dmnRuntime.getModels());
         List<DMNResource> dmnResources = dmnRuntime.getModels().stream().map(model -> new DMNResource(model, r2cr.get(model.getResource()))).collect(toList());
         resources.addAll(dmnResources);
-    }
-
-    @Override
-    public void setPackageName(String packageName) {
-        this.packageName = packageName;
-        this.applicationCanonicalName = packageName + ".Application";
-    }
-
-    @Override
-    public void setDependencyInjection(DependencyInjectionAnnotator annotator) {
-        this.annotator = annotator;
     }
 
     @Override
@@ -150,7 +124,7 @@ public class DecisionCodegen extends AbstractGenerator {
             List<DMNModel> models = resources.stream().map(DMNResource::getDmnModel).collect(Collectors.toList());
             oasResult = DMNOASGeneratorFactory.generator(models).build();
             String jsonContent = new ObjectMapper().writeValueAsString(oasResult.getJsonSchemaNode());
-            storeFile(GeneratedFile.Type.GENERATED_CP_RESOURCE, "META-INF/resources/dmnDefinitions.json", jsonContent);
+            storeFile(GeneratedFileType.RESOURCE, "META-INF/resources/dmnDefinitions.json", jsonContent);
         } catch (Exception e) {
             LOGGER.error("Error while trying to generate OpenAPI specification for the DMN models", e);
         }
@@ -169,19 +143,18 @@ public class DecisionCodegen extends AbstractGenerator {
             if (stronglyTypedEnabled) {
                 generateStronglyTypedInput(model);
             }
-            DecisionRestResourceGenerator resourceGenerator = new DecisionRestResourceGenerator(model, applicationCanonicalName).withDependencyInjection(annotator)
-                                                                                                                                .withAddons(addonsConfig)
-                                                                                                                                .withStronglyTyped(stronglyTypedEnabled)
-                                                                                                                                .withOASResult(oasResult, isMPAnnotationsPresent(), isIOSwaggerOASv3AnnotationsPresent());
+            DecisionRestResourceGenerator resourceGenerator = new DecisionRestResourceGenerator(context(), model, applicationCanonicalName())
+                    .withStronglyTyped(stronglyTypedEnabled)
+                    .withOASResult(oasResult, isMPAnnotationsPresent(), isIOSwaggerOASv3AnnotationsPresent());
             rgs.add(resourceGenerator);
         }
 
         for (DecisionRestResourceGenerator resourceGenerator : rgs) {
-            if (addonsConfig.usePrometheusMonitoring()) {
+            if (context().getAddonsConfig().usePrometheusMonitoring()) {
                 generateAndStoreGrafanaDashboards(resourceGenerator);
             }
 
-            storeFile(GeneratedFile.Type.REST, resourceGenerator.generatedFilePath(), resourceGenerator.generate());
+            storeFile(REST_TYPE, resourceGenerator.generatedFilePath(), resourceGenerator.generate());
         }
 
         DMNMarshaller marshaller = DMNMarshallerFactory.newDefaultMarshaller();
@@ -198,17 +171,15 @@ public class DecisionCodegen extends AbstractGenerator {
                 }
             }
             String relativePath = CodegenStringUtil.escapeIdentifier(model.getNamespace()).replace(".", "/") + "/" + CodegenStringUtil.escapeIdentifier(model.getName()) + ".dmn_nologic";
-            storeFile(GeneratedFile.Type.GENERATED_CP_RESOURCE, relativePath, marshaller.marshal(definitions));
+            storeFile(GeneratedFileType.RESOURCE, relativePath, marshaller.marshal(definitions));
         }
     }
 
     private void generateAndStoreDecisionModelResourcesProvider() {
-        final DecisionModelResourcesProviderGenerator generator = new DecisionModelResourcesProviderGenerator(packageName,
-                                                                                                              applicationCanonicalName,
-                                                                                                              resources)
-                .withDependencyInjection(annotator)
-                .withAddons(addonsConfig);
-        storeFile(GeneratedFile.Type.CLASS, generator.generatedFilePath(), generator.generate());
+        final DecisionModelResourcesProviderGenerator generator = new DecisionModelResourcesProviderGenerator(context(),
+                                                                                                              applicationCanonicalName(),
+                                                                                                              resources);
+        storeFile(GeneratedFileType.SOURCE, generator.generatedFilePath(), generator.generate());
     }
 
     private void generateStronglyTypedInput(DMNModel model) {
@@ -235,7 +206,7 @@ public class DecisionCodegen extends AbstractGenerator {
                     .processTypes()
                     .generateSourceCodeOfAllTypes();
 
-            allTypesSourceCode.forEach((k, v) -> storeFile(GeneratedFile.Type.CLASS, k.replace(".", "/") + ".java", v));
+            allTypesSourceCode.forEach((k, v) -> storeFile(GeneratedFileType.SOURCE, k.replace(".", "/") + ".java", v));
         } catch (Exception e) {
             LOGGER.error("Unable to generate Strongly Typed Input for: {} {}", model.getNamespace(), model.getName());
             throw e;
@@ -243,70 +214,39 @@ public class DecisionCodegen extends AbstractGenerator {
     }
 
     private boolean isMPAnnotationsPresent() {
-        return this.pclResolverFn.apply("org.eclipse.microprofile.openapi.models.OpenAPI");
+        return context().hasClassAvailable("org.eclipse.microprofile.openapi.models.OpenAPI");
     }
 
     private boolean isIOSwaggerOASv3AnnotationsPresent() {
-        return this.pclResolverFn.apply("io.swagger.v3.oas.annotations.media.Schema");
-    }
-
-    private boolean trueIFFClassIsPresent(String fqn) {
-        if (notPCLClassloader != null) {
-            try {
-                Class<?> c = notPCLClassloader.loadClass(fqn);
-                if (c != null) {
-                    return true;
-                }
-            } catch (Exception e) {
-                // do nothing.
-            }
-        }
-        return false;
+        return context().hasClassAvailable("io.swagger.v3.oas.annotations.media.Schema");
     }
 
     private void generateAndStoreGrafanaDashboards(DecisionRestResourceGenerator resourceGenerator) {
         Definitions definitions = resourceGenerator.getDmnModel().getDefinitions();
         List<Decision> decisions = definitions.getDrgElement().stream().filter(x -> x.getParentDRDElement() instanceof Decision).map(x -> (Decision) x).collect(toList());
 
-        String operationalDashboard = GrafanaConfigurationWriter.generateOperationalDashboard(operationalDashboardDmnTemplate, resourceGenerator.getNameURL(), addonsConfig.useTracing());
-        String domainDashboard = GrafanaConfigurationWriter.generateDomainSpecificDMNDashboard(domainDashboardDmnTemplate, resourceGenerator.getNameURL(), decisions, addonsConfig.useTracing());
+        String operationalDashboard = GrafanaConfigurationWriter.generateOperationalDashboard(
+                operationalDashboardDmnTemplate,
+                resourceGenerator.getNameURL(),
+                context().getAddonsConfig().useTracing());
+        String domainDashboard = GrafanaConfigurationWriter.generateDomainSpecificDMNDashboard(
+                domainDashboardDmnTemplate,
+                resourceGenerator.getNameURL(),
+                decisions,
+                context().getAddonsConfig().useTracing());
         generatedFiles.addAll(DashboardGeneratedFileUtils.operational(operationalDashboard, resourceGenerator.getNameURL() + ".json"));
         generatedFiles.addAll(DashboardGeneratedFileUtils.domain(domainDashboard, resourceGenerator.getNameURL() + ".json"));
     }
 
-    @Override
-    public void updateConfig(ConfigGenerator cfg) {
-        if (!cResources.isEmpty()) {
-            cfg.withDecisionConfig(new DecisionConfigGenerator(packageName));
-        }
-    }
-
-    private void storeFile(GeneratedFile.Type type, String path, String source) {
+    private void storeFile(GeneratedFileType type, String path, String source) {
         generatedFiles.add(new GeneratedFile(type, path, source));
     }
 
-    public List<GeneratedFile> getGeneratedFiles() {
-        return generatedFiles;
-    }
-
     @Override
-    public ApplicationSection section() {
-        return decisionContainerGenerator;
-    }
-
-    public DecisionCodegen withAddons(AddonsConfig addonsConfig) {
-        this.decisionContainerGenerator.withAddons(addonsConfig);
-        this.addonsConfig = addonsConfig;
-        return this;
-    }
-
-    public DecisionCodegen withClassLoader(ClassLoader classLoader) {
-        this.notPCLClassloader = classLoader;
-        return this;
-    }
-
-    public DecisionCodegen withPCLResolverFn(PCLResolverFn fn) {
-        this.pclResolverFn = fn;
-        return this;
+    public Optional<ApplicationSection> section() {
+        return Optional.of(new DecisionContainerGenerator(
+                context(),
+                applicationCanonicalName(),
+                this.cResources));
     }
 }

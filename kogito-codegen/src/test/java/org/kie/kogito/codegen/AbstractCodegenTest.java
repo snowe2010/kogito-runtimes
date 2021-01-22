@@ -24,17 +24,14 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.Optional;
-import java.util.Set;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
+import org.kie.kogito.codegen.context.JavaKogitoBuildContext;
 import org.kie.memorycompiler.CompilationResult;
 import org.kie.memorycompiler.JavaCompiler;
 import org.kie.memorycompiler.JavaCompilerFactory;
@@ -42,8 +39,6 @@ import org.kie.memorycompiler.JavaConfiguration;
 import org.drools.compiler.compiler.io.memory.MemoryFileSystem;
 import org.kie.kogito.Application;
 import org.kie.kogito.codegen.context.KogitoBuildContext;
-import org.kie.kogito.codegen.context.QuarkusKogitoBuildContext;
-import org.kie.kogito.codegen.context.SpringBootKogitoBuildContext;
 import org.kie.kogito.codegen.decision.DecisionCodegen;
 import org.kie.kogito.codegen.io.CollectedResource;
 import org.kie.kogito.codegen.prediction.PredictionCodegen;
@@ -61,7 +56,7 @@ public class AbstractCodegenTest {
     /**
      * Order matters here because inside {@link AbstractCodegenTest#generateCode(Map)} it is the order used to invoke
      *
-     * {@link ApplicationGenerator#setupGenerator(Generator) }
+     * {@link ApplicationGenerator#registerGeneratorIfEnabled(Generator) }
      */
     protected enum TYPE {
         PROCESS,
@@ -71,12 +66,13 @@ public class AbstractCodegenTest {
         PREDICTION
     }
     private TestClassLoader classloader;
+    private AddonsConfig addonsConfig = AddonsConfig.DEFAULT;
 
     private static final JavaCompiler JAVA_COMPILER = JavaCompilerFactory.loadCompiler( JavaConfiguration.CompilerType.NATIVE, "11");
     private static final String TEST_JAVA = "src/test/java/";
     private static final String TEST_RESOURCES = "src/test/resources";
 
-    private static final Map<TYPE, Function<List<String>, Generator>> generatorTypeMap = new HashMap<>();
+    private static final Map<TYPE, BiFunction<KogitoBuildContext, List<String>, Generator>> generatorTypeMap = new HashMap<>();
 
     private static final String DUMMY_PROCESS_RUNTIME =
             "package org.drools.project.model;\n" +
@@ -119,12 +115,12 @@ public class AbstractCodegenTest {
             "}";
 
     static {
-        generatorTypeMap.put(TYPE.PROCESS, strings -> ProcessCodegen.ofCollectedResources(toCollectedResources(TEST_RESOURCES, strings)));
-        generatorTypeMap.put(TYPE.RULES, strings -> IncrementalRuleCodegen.ofCollectedResources(toCollectedResources(TEST_RESOURCES, strings)));
-        generatorTypeMap.put(TYPE.DECISION, strings -> DecisionCodegen.ofCollectedResources(toCollectedResources(TEST_RESOURCES, strings)));
+        generatorTypeMap.put(TYPE.PROCESS, (context, strings) -> ProcessCodegen.ofCollectedResources(context, toCollectedResources(TEST_RESOURCES, strings)));
+        generatorTypeMap.put(TYPE.RULES, (context, strings) -> IncrementalRuleCodegen.ofCollectedResources(context, toCollectedResources(TEST_RESOURCES, strings)));
+        generatorTypeMap.put(TYPE.DECISION, (context, strings) -> DecisionCodegen.ofCollectedResources(context, toCollectedResources(TEST_RESOURCES, strings)));
 
-        generatorTypeMap.put(TYPE.JAVA, strings -> IncrementalRuleCodegen.ofJavaResources(toCollectedResources(TEST_JAVA, strings)));
-        generatorTypeMap.put(TYPE.PREDICTION, strings -> PredictionCodegen.ofCollectedResources(false, toCollectedResources(TEST_RESOURCES, strings)));
+        generatorTypeMap.put(TYPE.JAVA, (context, strings) -> IncrementalRuleCodegen.ofJavaResources(context, toCollectedResources(TEST_JAVA, strings)));
+        generatorTypeMap.put(TYPE.PREDICTION, (context, strings) -> PredictionCodegen.ofCollectedResources(context, toCollectedResources(TEST_RESOURCES, strings)));
     }
 
     private static Collection<CollectedResource> toCollectedResources(String basePath, List<String> strings) {
@@ -143,10 +139,17 @@ public class AbstractCodegenTest {
                 .collect(Collectors.toList());
     }
 
-    private boolean withSpringContext;
 
-    public void withSpringContext(boolean withSpringContext){
-        this.withSpringContext = withSpringContext;
+    public void withSpringContext() {
+        throw new UnsupportedOperationException("To be fixed KOGITO-4000");
+    }
+
+    public void withQuarkusContext() {
+        throw new UnsupportedOperationException("To be fixed KOGITO-4000");
+    }
+
+    public void withJavaContext() {
+        throw new UnsupportedOperationException("To be fixed KOGITO-4000");
     }
 
     protected Application generateCodeProcessesOnly(String... processes) throws Exception {
@@ -168,30 +171,23 @@ public class AbstractCodegenTest {
     }
 
     protected Application generateCode(Map<TYPE, List<String>> resourcesTypeMap) throws Exception {
-        GeneratorContext context = GeneratorContext.ofResourcePath(new File(TEST_RESOURCES));
+        return generateCode(resourcesTypeMap, this.getClass().getPackage().getName());
+    }
 
-        //Testing based on Quarkus as Default
-        context.withBuildContext(Optional.ofNullable(withSpringContext)
-                                         .filter(Boolean.TRUE::equals)
-                                         .<KogitoBuildContext>map(t -> new SpringBootKogitoBuildContext((className -> true)))
-                                         .orElse(new QuarkusKogitoBuildContext((className -> true))));
+    protected Application generateCode(Map<TYPE, List<String>> resourcesTypeMap, String packageName) throws Exception {
+        KogitoBuildContext context = JavaKogitoBuildContext.builder()
+                .withApplicationProperties(new File(TEST_RESOURCES))
+                .withPackageName(packageName)
+                .withAddonsConfig(addonsConfig)
+                .build();
 
         ApplicationGenerator appGen =
-                new ApplicationGenerator(this.getClass().getPackage().getName(), new File("target/codegen-tests"))
-                        .withGeneratorContext(context)
-                        .withDependencyInjection(null);
+                new ApplicationGenerator(context);
 
-        // Hack just to avoid test breaking
-        Set<TYPE> generatedTypes = new HashSet<>();
         for (TYPE type :  TYPE.values()) {
             if (resourcesTypeMap.containsKey(type) && !resourcesTypeMap.get(type).isEmpty()) {
-                appGen.setupGenerator(generatorTypeMap.get(type).apply(resourcesTypeMap.get(type)));
-                generatedTypes.add(type);
+                appGen.registerGeneratorIfEnabled(generatorTypeMap.get(type).apply(context, resourcesTypeMap.get(type)));
             }
-        }
-        // Hack just to avoid test breaking
-        if (generatedTypes.contains(TYPE.DECISION) && !generatedTypes.contains(TYPE.PREDICTION)) {
-            appGen.setupGenerator(generatorTypeMap.get(TYPE.PREDICTION).apply(Collections.EMPTY_LIST));
         }
 
         Collection<GeneratedFile> generatedFiles = appGen.generate();
@@ -232,7 +228,7 @@ public class AbstractCodegenTest {
         classloader = new TestClassLoader(this.getClass().getClassLoader(), trgMfs.getMap());
 
         @SuppressWarnings("unchecked")
-        Class<Application> app = (Class<Application>) Class.forName(this.getClass().getPackage().getName() + ".Application", true, classloader);
+        Class<Application> app = (Class<Application>) Class.forName(packageName + ".Application", true, classloader);
 
         Application application = app.getDeclaredConstructor().newInstance();
         return application;
@@ -244,6 +240,15 @@ public class AbstractCodegenTest {
     
     protected void log(String content) {
         LOGGER.debug(content);
+    }
+
+    /**
+     * Use this setter to override AddonsConfig used during the generation
+     * NOTE: this setter has only effect if invoked before any of the generate*() methods
+     * @param addonsConfig
+     */
+    protected void setAddonsConfig(AddonsConfig addonsConfig) {
+        this.addonsConfig = addonsConfig;
     }
 
     private static class TestClassLoader extends URLClassLoader {

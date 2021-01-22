@@ -12,6 +12,7 @@ import org.kie.kogito.rules.RuleUnitInstance;
 @Named("$endpointName$")
 public class $unit$Query$name$RequestHandler implements RequestHandler<$UnitType$, $ReturnType$> {
 
+    @javax.inject.Inject
     RuleUnit<$UnitType$> ruleUnit;
 
     public $unit$Query$name$RequestHandler() {

@@ -307,7 +307,7 @@ public class IncrementalRuleCodegen extends AbstractGenerator {
         for (RuleUnitGenerator ruleUnit : ruleUnitGenerators) {
             initRuleUnitHelper( ruleUnitHelper, ruleUnit.getRuleUnitDescription() );
 
-            List<String> queryClasses = context().hasREST() ? generateQueriesEndpoint( errors, generatedFiles, ruleUnitHelper, ruleUnit ) : Collections.emptyList();
+            List<String> queryClasses = generateQueriesEndpoint( errors, generatedFiles, ruleUnitHelper, ruleUnit );
 
             generatedFiles.add( ruleUnit.generateFile( RULE_TYPE) );
 

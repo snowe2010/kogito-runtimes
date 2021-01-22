@@ -99,7 +99,6 @@ public class KogitoAssetsProcessor {
 
     private static final DotName persistenceFactoryClass = DotName.createSimple("org.kie.kogito.persistence.KogitoProcessInstancesFactory");
     private static final DotName quarkusSVGService = DotName.createSimple("org.kie.kogito.svg.service.QuarkusProcessSvgService");
-    private static final DotName awsRequestHandler = DotName.createSimple("com.amazonaws.services.lambda.runtime.RequestHandler");
 
     private static final PathMatcher svgFileMatcher = FileSystems.getDefault().getPathMatcher("glob:**.svg");
 
@@ -139,7 +138,6 @@ public class KogitoAssetsProcessor {
 
 
         boolean useProcessSVG = combinedIndexBuildItem.getIndex().getClassByName(quarkusSVGService) != null;
-        boolean useRequestHandlers = combinedIndexBuildItem.getIndex().getAllKnownImplementors(awsRequestHandler) != null;
         DotName requestHandler = DotName.createSimple("com.amazonaws.services.lambda.runtime.RequestHandler");
         Collection<ClassInfo> allKnownImplementors = combinedIndexBuildItem.getIndex().getAllKnownImplementors(requestHandler);
 

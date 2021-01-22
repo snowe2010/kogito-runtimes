@@ -58,19 +58,25 @@ import static org.kie.kogito.codegen.rules.IncrementalRuleCodegen.TEMPLATE_RULE_
 
 public class QueryEndpointGenerator implements FileGenerator {
 
-    private final RuleUnitDescription ruleUnit;
-    private final QueryModel query;
+    protected final RuleUnitDescription ruleUnit;
+    protected final QueryModel query;
 
-    private final String name;
-    private final KogitoBuildContext context;
-    private final String endpointName;
-    private final String queryClassName;
-    private final String targetClassName;
-    private final TemplatedGenerator generator;
+    protected final String name;
+    protected final KogitoBuildContext context;
+    protected final String endpointName;
+    protected final String queryClassName;
+    protected final String targetClassName;
+    protected final TemplatedGenerator generator;
 
-    public QueryEndpointGenerator(RuleUnitDescription ruleUnit,
-                                  QueryModel query,
-                                  KogitoBuildContext context) {
+    public QueryEndpointGenerator(RuleUnitDescription ruleUnit, QueryModel query, KogitoBuildContext context) {
+        this(ruleUnit, query, context, "RestQuery", "Endpoint");
+    }
+
+    protected QueryEndpointGenerator(RuleUnitDescription ruleUnit,
+                                     QueryModel query,
+                                     KogitoBuildContext context,
+                                     String templateName,
+                                     String classNameSuffix) {
         this.ruleUnit = ruleUnit;
         this.query = query;
         this.name = toCamelCase(query.getName());
@@ -78,13 +84,13 @@ public class QueryEndpointGenerator implements FileGenerator {
         this.endpointName = toKebabCase(name);
 
         this.queryClassName = ruleUnit.getSimpleName() + "Query" + name;
-        this.targetClassName = queryClassName + "Endpoint";
+        this.targetClassName = queryClassName + classNameSuffix;
         this.generator = TemplatedGenerator.builder()
                 .withPackageName(query.getNamespace())
                 .withTemplateBasePath(TEMPLATE_RULE_FOLDER)
                 .withTargetTypeName(targetClassName)
                 .withFallbackContext(JavaKogitoBuildContext.CONTEXT_NAME)
-                .build(context, "RestQuery");
+                .build(context, templateName);
     }
 
     public QueryGenerator getQueryGenerator() {
@@ -148,7 +154,9 @@ public class QueryEndpointGenerator implements FileGenerator {
 
         String returnType = getReturnType(clazz);
         generateConstructors(clazz);
+
         generateQueryMethods(cu, clazz, returnType);
+
         clazz.getMembers().sort(new BodyDeclarationComparator());
         return cu.toString();
     }
@@ -157,7 +165,7 @@ public class QueryEndpointGenerator implements FileGenerator {
         return endpointName;
     }
 
-    private void generateConstructors(ClassOrInterfaceDeclaration clazz) {
+    protected void generateConstructors(ClassOrInterfaceDeclaration clazz) {
         for (ConstructorDeclaration c : clazz.getConstructors()) {
             c.setName(targetClassName);
             if (!c.getParameters().isEmpty()) {
@@ -166,7 +174,7 @@ public class QueryEndpointGenerator implements FileGenerator {
         }
     }
 
-    private void generateQueryMethods(CompilationUnit cu, ClassOrInterfaceDeclaration clazz, String returnType) {
+    protected void generateQueryMethods(CompilationUnit cu, ClassOrInterfaceDeclaration clazz, String returnType) {
         boolean hasDI = context.hasDI();
         MethodDeclaration queryMethod = clazz.getMethodsByName("executeQuery").get(0);
         queryMethod.getParameter(0).setType(ruleUnit.getCanonicalName() + (hasDI ? "" : "DTO"));
@@ -206,7 +214,7 @@ public class QueryEndpointGenerator implements FileGenerator {
         }
     }
 
-    private void addMonitoringToResource(CompilationUnit cu, MethodDeclaration[] methods, String nameURL) {
+    protected void addMonitoringToResource(CompilationUnit cu, MethodDeclaration[] methods, String nameURL) {
         cu.addImport(new ImportDeclaration(new Name("org.kie.kogito.monitoring.core.common.system.metrics.SystemMetricsCollector"), false, false));
 
         for (MethodDeclaration md : methods) {
@@ -220,7 +228,7 @@ public class QueryEndpointGenerator implements FileGenerator {
         }
     }
 
-    private BlockStmt wrapBodyAddingExceptionLogging(BlockStmt body, String nameURL) {
+    protected BlockStmt wrapBodyAddingExceptionLogging(BlockStmt body, String nameURL) {
         TryStmt ts = new TryStmt();
         ts.setTryBlock(body);
         CatchClause cc = new CatchClause();
@@ -239,7 +247,7 @@ public class QueryEndpointGenerator implements FileGenerator {
         return new BlockStmt(new NodeList<>(ts));
     }
 
-    private String getReturnType(ClassOrInterfaceDeclaration clazz) {
+    protected String getReturnType(ClassOrInterfaceDeclaration clazz) {
         if (query.getBindings().size() == 1) {
             Map.Entry<String, Class<?>> binding = query.getBindings().entrySet().iterator().next();
             return binding.getValue().getCanonicalName();
@@ -247,7 +255,7 @@ public class QueryEndpointGenerator implements FileGenerator {
         return queryClassName + ".Result";
     }
 
-    private void interpolateStrings(StringLiteralExpr vv) {
+    protected void interpolateStrings(StringLiteralExpr vv) {
         String interpolated = vv.getValue()
                 .replace("$name$", name)
                 .replace("$endpointName$", endpointName)
@@ -256,7 +264,7 @@ public class QueryEndpointGenerator implements FileGenerator {
         vv.setString(interpolated);
     }
 
-    private void setUnitGeneric(Type type) {
+    protected void setUnitGeneric(Type type) {
         setGeneric(type, ruleUnit);
     }
 
@@ -268,7 +276,7 @@ public class QueryEndpointGenerator implements FileGenerator {
         type.asClassOrInterfaceType().setTypeArguments(parseClassOrInterfaceType(toNonPrimitiveType(typeArgument)));
     }
 
-    private static String toNonPrimitiveType(String type) {
+    protected static String toNonPrimitiveType(String type) {
         switch (type) {
             case "int":
                 return "Integer";
@@ -290,13 +298,13 @@ public class QueryEndpointGenerator implements FileGenerator {
         return type;
     }
 
-    private static String toCamelCase(String inputString) {
+    protected static String toCamelCase(String inputString) {
         return Stream.of(inputString.split(" "))
                 .map(s -> s.length() > 1 ? s.substring(0, 1).toUpperCase() + s.substring(1) : s.substring(0, 1).toUpperCase())
                 .collect(Collectors.joining());
     }
 
-    private static String toKebabCase(String inputString) {
+    protected static String toKebabCase(String inputString) {
         return inputString.replaceAll("(.)(\\p{Upper})", "$1-$2").toLowerCase();
     }
 }

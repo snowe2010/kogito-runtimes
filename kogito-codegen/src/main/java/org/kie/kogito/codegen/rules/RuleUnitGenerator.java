@@ -95,15 +95,23 @@ public class RuleUnitGenerator implements FileGenerator {
     public List<QueryEndpointGenerator> queries() {
         return queries.stream()
                 .filter(query -> !query.hasParameters())
-                .map(query -> new QueryEndpointGenerator(ruleUnit, query, context))
+                .map(this::toQueryEndpointGenerator)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
                 .collect(toList());
     }
 
-    public List<QueryRequestHandlerGenerator> queriesAsRequests() {
-        return queries.stream()
-                .filter(query -> !query.hasParameters())
-                .map(query -> new QueryRequestHandlerGenerator(ruleUnit, query, annotator, addonsConfig))
-                .collect(toList());
+    protected Optional<QueryEndpointGenerator> toQueryEndpointGenerator(QueryModel query) {
+        // this should stay first because at the moment context.hasREST() is always true in Quarkus
+        if(context.hasClassAvailable("com.amazonaws.services.lambda.runtime.RequestHandler")) {
+            return Optional.of(new QueryRequestHandlerGenerator(ruleUnit, query, context));
+        }
+
+        if(context.hasREST()) {
+            return Optional.of(new QueryEndpointGenerator(ruleUnit, query, context));
+        }
+
+        return Optional.empty();
     }
 
     @Override

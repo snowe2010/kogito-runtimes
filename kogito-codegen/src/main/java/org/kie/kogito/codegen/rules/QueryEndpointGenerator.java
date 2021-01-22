@@ -45,58 +45,55 @@ import com.github.javaparser.ast.type.Type;
 import org.drools.compiler.compiler.DroolsError;
 import org.drools.modelcompiler.builder.QueryModel;
 import org.kie.internal.ruleunit.RuleUnitDescription;
-import org.kie.kogito.codegen.AddonsConfig;
 import org.kie.kogito.codegen.BodyDeclarationComparator;
 import org.kie.kogito.codegen.FileGenerator;
-import org.kie.kogito.codegen.TemplateInstantiationException;
 import org.kie.kogito.codegen.TemplatedGenerator;
-import org.kie.kogito.codegen.di.DependencyInjectionAnnotator;
+import org.kie.kogito.codegen.context.JavaKogitoBuildContext;
+import org.kie.kogito.codegen.context.KogitoBuildContext;
 
 import static com.github.javaparser.StaticJavaParser.parseClassOrInterfaceType;
 import static com.github.javaparser.StaticJavaParser.parseStatement;
 import static org.drools.modelcompiler.builder.generator.DrlxParseUtil.classNameToReferenceType;
+import static org.kie.kogito.codegen.rules.IncrementalRuleCodegen.TEMPLATE_RULE_FOLDER;
 
 public class QueryEndpointGenerator implements FileGenerator {
 
-    public static final String RESOURCE_CDI = "/class-templates/rules/CdiRestQueryTemplate.java";
-    public static final String RESOURCE_SPRING = "/class-templates/rules/SpringRestQueryTemplate.java";
-    public static final String RESOURCE_DEFAULT = "/class-templates/rules/RestQueryTemplate.java";
-
     private final RuleUnitDescription ruleUnit;
     private final QueryModel query;
-    private final DependencyInjectionAnnotator annotator;
 
     private final String name;
+    private final KogitoBuildContext context;
     private final String endpointName;
     private final String queryClassName;
-    private final String targetCanonicalName;
-    private final String generatedFilePath;
-    private final AddonsConfig addonsConfig;
+    private final String targetClassName;
     private final TemplatedGenerator generator;
 
-    public QueryEndpointGenerator(RuleUnitDescription ruleUnit, QueryModel query, DependencyInjectionAnnotator annotator, AddonsConfig addonsConfig) {
+    public QueryEndpointGenerator(RuleUnitDescription ruleUnit,
+                                  QueryModel query,
+                                  KogitoBuildContext context) {
         this.ruleUnit = ruleUnit;
         this.query = query;
         this.name = toCamelCase(query.getName());
+        this.context = context;
         this.endpointName = toKebabCase(name);
-        this.annotator = annotator;
 
         this.queryClassName = ruleUnit.getSimpleName() + "Query" + name;
-        this.targetCanonicalName = queryClassName + "Endpoint";
-        this.generatedFilePath = (query.getNamespace() + "." + targetCanonicalName).replace('.', '/') + ".java";
-        this.addonsConfig = addonsConfig;
-        this.generator =
-                new TemplatedGenerator(query.getNamespace(), targetCanonicalName, RESOURCE_CDI, RESOURCE_SPRING, RESOURCE_DEFAULT)
-                        .withDependencyInjection(annotator);
+        this.targetClassName = queryClassName + "Endpoint";
+        this.generator = TemplatedGenerator.builder()
+                .withPackageName(query.getNamespace())
+                .withTemplateBasePath(TEMPLATE_RULE_FOLDER)
+                .withTargetTypeName(targetClassName)
+                .withFallbackContext(JavaKogitoBuildContext.CONTEXT_NAME)
+                .build(context, "RestQuery");
     }
 
     public QueryGenerator getQueryGenerator() {
-        return new QueryGenerator(ruleUnit, query, name);
+        return new QueryGenerator(context, ruleUnit, query, name);
     }
 
     @Override
     public String generatedFilePath() {
-        return generatedFilePath;
+        return generator.generatedFilePath();
     }
 
     @Override
@@ -134,17 +131,13 @@ public class QueryEndpointGenerator implements FileGenerator {
 
     @Override
     public String generate() {
-        CompilationUnit cu = generator.compilationUnit()
-                .orElseThrow(() -> {
-                    throw new TemplateInstantiationException(
-                            generator.typeName(), generator.templatePath(), "Could not create CompilationUnit");
-                });
+        CompilationUnit cu = generator.compilationUnitOrThrow("Could not create CompilationUnit");
         cu.setPackageDeclaration(query.getNamespace());
 
         ClassOrInterfaceDeclaration clazz = cu
                 .findFirst(ClassOrInterfaceDeclaration.class)
                 .orElseThrow(() -> new NoSuchElementException("Compilation unit doesn't contain a class or interface declaration!"));
-        clazz.setName(targetCanonicalName);
+        clazz.setName(targetClassName);
 
         cu.findAll(StringLiteralExpr.class).forEach(this::interpolateStrings);
 
@@ -166,7 +159,7 @@ public class QueryEndpointGenerator implements FileGenerator {
 
     private void generateConstructors(ClassOrInterfaceDeclaration clazz) {
         for (ConstructorDeclaration c : clazz.getConstructors()) {
-            c.setName(targetCanonicalName);
+            c.setName(targetClassName);
             if (!c.getParameters().isEmpty()) {
                 setUnitGeneric(c.getParameter(0).getType());
             }
@@ -174,7 +167,7 @@ public class QueryEndpointGenerator implements FileGenerator {
     }
 
     private void generateQueryMethods(CompilationUnit cu, ClassOrInterfaceDeclaration clazz, String returnType) {
-        boolean hasDI = annotator != null;
+        boolean hasDI = context.hasDI();
         MethodDeclaration queryMethod = clazz.getMethodsByName("executeQuery").get(0);
         queryMethod.getParameter(0).setType(ruleUnit.getCanonicalName() + (hasDI ? "" : "DTO"));
         setGeneric(queryMethod.getType(), returnType);
@@ -208,7 +201,7 @@ public class QueryEndpointGenerator implements FileGenerator {
                 .getStatement(1);
         returnMethodSingle.findAll(VariableDeclarator.class).forEach(decl -> decl.setType(toNonPrimitiveType(returnType)));
 
-        if (addonsConfig.useMonitoring()) {
+        if (context.getAddonsConfig().useMonitoring()) {
             addMonitoringToResource(cu, new MethodDeclaration[]{queryMethod, queryMethodSingle}, endpointName);
         }
     }

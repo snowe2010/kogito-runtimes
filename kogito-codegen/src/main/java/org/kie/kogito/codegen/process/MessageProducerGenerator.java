@@ -26,64 +26,71 @@ import org.kie.api.definition.process.WorkflowProcess;
 import org.kie.kogito.codegen.BodyDeclarationComparator;
 import org.kie.kogito.codegen.InvalidTemplateException;
 import org.kie.kogito.codegen.TemplatedGenerator;
-import org.kie.kogito.codegen.di.DependencyInjectionAnnotator;
+import org.kie.kogito.codegen.context.JavaKogitoBuildContext;
+import org.kie.kogito.codegen.context.KogitoBuildContext;
 
 import static org.kie.kogito.codegen.CodegenUtils.interpolateTypes;
 
 public class MessageProducerGenerator {
 
     protected static final String EVENT_DATA_VAR = "eventData";
-    private static final String RESOURCE = "/class-templates/MessageProducerTemplate.java";
-    private static final String RESOURCE_CDI = "/class-templates/CdiMessageProducerTemplate.java";
-    private static final String RESOURCE_SPRING = "/class-templates/SpringMessageProducerTemplate.java";
 
-    private final TemplatedGenerator generator;
+    protected final TemplatedGenerator generator;
 
-    private final String packageName;
+    private final String processPackageName;
     protected final String resourceClazzName;
     private final String processName;
     protected final String messageDataEventClassName;
+    protected final KogitoBuildContext context;
     protected WorkflowProcess process;
     private String processId;
-    protected DependencyInjectionAnnotator annotator;
 
     protected TriggerMetaData trigger;
 
     public MessageProducerGenerator(
+            KogitoBuildContext context,
             WorkflowProcess process,
             String modelfqcn,
             String processfqcn,
             String messageDataEventClassName,
             TriggerMetaData trigger) {
+        this(context, process, modelfqcn, processfqcn, messageDataEventClassName, trigger, "MessageProducer");
+    }
+
+    public MessageProducerGenerator(
+            KogitoBuildContext context,
+            WorkflowProcess process,
+            String modelfqcn,
+            String processfqcn,
+            String messageDataEventClassName,
+            TriggerMetaData trigger,
+            String templateName) {
+        this.context = context;
         this.process = process;
         this.trigger = trigger;
-        this.packageName = process.getPackageName();
+        this.processPackageName = process.getPackageName();
         this.processId = process.getId();
         this.processName = processId.substring(processId.lastIndexOf('.') + 1);
         String classPrefix = StringUtils.ucFirst(processName);
         this.resourceClazzName = classPrefix + "MessageProducer_" + trigger.getOwnerId();
         this.messageDataEventClassName = messageDataEventClassName;
 
-        this.generator = new TemplatedGenerator(
-                packageName,
-                resourceClazzName,
-                RESOURCE_CDI,
-                RESOURCE_SPRING,
-                RESOURCE);
-    }
-
-    public MessageProducerGenerator withDependencyInjection(DependencyInjectionAnnotator annotator) {
-        this.annotator = annotator;
-        generator.withDependencyInjection(annotator);
-        return this;
+        this.generator = TemplatedGenerator.builder()
+                .withTargetTypeName(resourceClazzName)
+                .withPackageName(processPackageName)
+                // NOTE this fallback is only necessary because of deprecated CloudEventsMessageProducerGenerator subclass
+                .withFallbackContext(JavaKogitoBuildContext.CONTEXT_NAME)
+                .build(context, templateName);
     }
 
     public String generate() {
-        CompilationUnit clazz = generator.compilationUnit()
-                .orElseThrow(() -> new InvalidTemplateException(resourceClazzName, generator.templatePath(), "Cannot generate message producer"));
-        clazz.setPackageDeclaration(process.getPackageName());
+        CompilationUnit clazz = generator.compilationUnitOrThrow("Cannot generate message producer");
 
-        ClassOrInterfaceDeclaration template = clazz.findFirst(ClassOrInterfaceDeclaration.class).get();
+        ClassOrInterfaceDeclaration template = clazz.findFirst(ClassOrInterfaceDeclaration.class)
+                .orElseThrow(() -> new InvalidTemplateException(
+                        generator,
+                        "Cannot find class declaration"
+                ));
         template.setName(resourceClazzName);
         template.findAll(ConstructorDeclaration.class).forEach(cd -> cd.setName(resourceClazzName));
 
@@ -103,9 +110,5 @@ public class MessageProducerGenerator {
 
     public String generatedFilePath() {
         return generator.generatedFilePath();
-    }
-
-    protected boolean useInjection() {
-        return this.annotator != null;
     }
 }

@@ -15,9 +15,10 @@
 
 package org.kie.kogito.codegen;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Optional;
+import java.util.stream.Collectors;
 
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
@@ -25,34 +26,74 @@ import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
+import com.github.javaparser.ast.stmt.ExplicitConstructorInvocationStmt;
 import org.kie.kogito.Addons;
+import org.kie.kogito.codegen.context.KogitoBuildContext;
 
 import static org.kie.kogito.codegen.CodegenUtils.newObject;
 
-public class ApplicationConfigGenerator extends TemplatedGenerator {
+public class ApplicationConfigGenerator {
 
+    public static final GeneratedFileType APPLICATION_CONFIG_TYPE = GeneratedFileType.of("APPLICATION_CONFIG", GeneratedFileType.Category.SOURCE);
+    public static final String TEMPLATE_CONFIG_FOLDER = "/class-templates/config/";
     private static final String CLASS_NAME = "ApplicationConfig";
-    private static final String RESOURCE_DEFAULT = "/class-templates/config/ApplicationConfigTemplate.java";
-    private static final String RESOURCE_CDI = "/class-templates/config/CdiApplicationConfigTemplate.java";
-    private static final String RESOURCE_SPRING = "/class-templates/config/SpringApplicationConfigTemplate.java";
+
+    private final TemplatedGenerator templatedGenerator;
+    private KogitoBuildContext context;
 
     private Collection<String> addons = Collections.emptyList();
 
-    public ApplicationConfigGenerator(String packageName) {
-        super(packageName,
-              CLASS_NAME,
-              RESOURCE_CDI,
-              RESOURCE_SPRING,
-              RESOURCE_DEFAULT);
+    private final Collection<ConfigGenerator> configGenerators = new ArrayList<>();
+
+    public ApplicationConfigGenerator(KogitoBuildContext context) {
+        this.templatedGenerator = TemplatedGenerator.builder()
+                .withTemplateBasePath(TEMPLATE_CONFIG_FOLDER)
+                .build(context, CLASS_NAME);
+        this.context = context;
+
+        this.configGenerators.add(new ConfigBeanGenerator(context));
     }
 
-    @Override
-    public Optional<CompilationUnit> compilationUnit() {
-        Optional<CompilationUnit> compilationUnit = super.compilationUnit();
-        compilationUnit
-                .flatMap(u -> u.findFirst(ClassOrInterfaceDeclaration.class))
+    public ApplicationConfigGenerator withConfigGenerator(ConfigGenerator configGenerator) {
+        this.configGenerators.add(configGenerator);
+        return this;
+    }
+
+    public Collection<GeneratedFile> generate() {
+        ArrayList<GeneratedFile> generatedFiles = new ArrayList<>();
+
+        configGenerators.forEach(configGenerator ->
+                generatedFiles.add(configGenerator.generate()));
+
+        Collection<String> configClassNames = configGenerators.stream()
+                .map(ConfigGenerator::configClassName)
+                .collect(Collectors.toList());
+
+        generatedFiles.add(generateApplicationConfigDescriptor(configClassNames));
+
+        return generatedFiles;
+    }
+
+    private GeneratedFile generateApplicationConfigDescriptor(Collection<String> configClassNames) {
+        CompilationUnit compilationUnit = templatedGenerator.compilationUnitOrThrow();
+
+        compilationUnit.findFirst(ClassOrInterfaceDeclaration.class)
                 .ifPresent(this::replaceAddonPlaceHolder);
-        return compilationUnit;
+
+        // Add explicit initialization when no DI
+        if(!context.hasDI()) {
+            ClassOrInterfaceDeclaration cls = compilationUnit
+                    .findFirst(ClassOrInterfaceDeclaration.class)
+                    .orElseThrow(() -> new InvalidTemplateException(
+                            templatedGenerator,
+                            "Compilation unit doesn't contain a class or interface declaration!"));
+
+            initConfigs(getSuperStatement(cls), configClassNames);
+        }
+
+        return new GeneratedFile(APPLICATION_CONFIG_TYPE,
+                                 templatedGenerator.generatedFilePath(),
+                                 compilationUnit.toString());
     }
 
     private void replaceAddonPlaceHolder(ClassOrInterfaceDeclaration cls) {
@@ -60,15 +101,13 @@ public class ApplicationConfigGenerator extends TemplatedGenerator {
         NameExpr addonsPlaceHolder =
                 cls.findFirst(NameExpr.class, e -> e.getNameAsString().equals("$Addons$")).
                         orElseThrow(() -> new InvalidTemplateException(
-                                typeName(),
-                                templatePath(),
+                                templatedGenerator,
                                 "Missing $Addons$ placeholder"));
 
         ObjectCreationExpr addonsList = generateAddonsList();
         addonsPlaceHolder.getParentNode()
                 .orElseThrow(() -> new InvalidTemplateException(
-                        typeName(),
-                        templatePath(),
+                        templatedGenerator,
                         "Cannot replace $Addons$ placeholder"))
                 .replace(addonsPlaceHolder, addonsList);
     }
@@ -82,8 +121,29 @@ public class ApplicationConfigGenerator extends TemplatedGenerator {
         return newObject(Addons.class, asListOfAddons);
     }
 
-    public ApplicationConfigGenerator withAddons(Collection<String> addons) {
+    public void withAddons(Collection<String> addons) {
         this.addons = addons;
-        return this;
+    }
+
+    private ExplicitConstructorInvocationStmt getSuperStatement(ClassOrInterfaceDeclaration cls) {
+        return cls.findFirst(ExplicitConstructorInvocationStmt.class)
+                .orElseThrow(() -> new InvalidTemplateException(
+                        templatedGenerator,
+                        "Impossible to find super invocation"));
+    }
+
+    /**
+     * For each config it produces a new instance follow naming convention and add it to superInvocation
+     *       e.g. section: ProcessConfig
+     * produce:
+     *       e.g.: new ProcessConfig()
+     * @param superInvocation
+     * @param configClassNames
+     */
+    private void initConfigs(ExplicitConstructorInvocationStmt superInvocation, Collection<String> configClassNames) {
+        configClassNames.stream()
+                .map(config -> new ObjectCreationExpr()
+                        .setType(config))
+                .forEach(superInvocation::addArgument);
     }
 }

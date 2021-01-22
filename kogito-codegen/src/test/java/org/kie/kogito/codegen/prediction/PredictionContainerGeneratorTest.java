@@ -30,16 +30,14 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.CompilationUnit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.kie.kogito.codegen.AddonsConfig;
+import org.kie.kogito.codegen.context.JavaKogitoBuildContext;
 import org.kie.pmml.commons.model.KiePMMLModel;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PredictionContainerGeneratorTest {
@@ -50,8 +48,10 @@ class PredictionContainerGeneratorTest {
 
     @BeforeAll
     public static void setup() {
-        predictionContainerGenerator = new PredictionModelsGenerator(APP_CANONICAL_NAME,
-                                                                     PMML_RESOURCES);
+        predictionContainerGenerator = new PredictionModelsGenerator(
+                JavaKogitoBuildContext.builder().build(),
+                APP_CANONICAL_NAME,
+                PMML_RESOURCES);
         assertNotNull(predictionContainerGenerator);
     }
 
@@ -62,24 +62,15 @@ class PredictionContainerGeneratorTest {
     }
 
     @Test
-    void withAddons() {
-        PredictionModelsGenerator retrieved = predictionContainerGenerator.withAddons(null);
-        assertEquals(retrieved, predictionContainerGenerator);
-        assertNull(predictionContainerGenerator.addonsConfig);
-        predictionContainerGenerator.withAddons(AddonsConfig.DEFAULT);
-        assertEquals(AddonsConfig.DEFAULT, predictionContainerGenerator.addonsConfig);
-    }
-
-    @Test
     void classDeclaration() {
-        ClassOrInterfaceDeclaration retrieved = predictionContainerGenerator.classDeclaration();
+        CompilationUnit retrieved = predictionContainerGenerator.compilationUnit();
         assertNotNull(retrieved);
         String retrievedString = retrieved.toString();
         String expected = PMML_RESOURCES
                 .stream()
-                .map(pmmlResource ->  "\"" + pmmlResource.getModelPath() + "\"")
+                .map(pmmlResource -> "\"" + pmmlResource.getModelPath() + "\"")
                 .collect(Collectors.joining(", "));
-        expected = String.format("org.kie.kogito.pmml.PMMLKogito.createKieRuntimeFactories(%s);", expected);
+        expected = String.format("init(%s);", expected);
         assertTrue(retrievedString.contains(expected));
 
     }
